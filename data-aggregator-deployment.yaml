@@ -1,0 +1,128 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: data-aggregator-script
+data:
+  data_aggregator.py: |
+    from flask import Flask, request, jsonify
+    import logging
+
+    app = Flask(__name__)
+    logs = []
+
+    # Set up logging
+    logging.basicConfig(level=logging.INFO, 
+                        format='%(asctime)s - %(levelname)s - %(message)s')
+
+    @app.route('/collect', methods=['POST'])
+    def collect_data():
+        try:
+            data = request.json  # Get the JSON data from the request
+            if not data:
+                raise ValueError("No JSON data found in request.")
+            
+            # Log the received data for debugging purposes
+            logging.info(f"Received data from node: {data.get('node', 'Unknown')}")
+            
+            # Add the data to aggregated logs
+            logs.append(data)
+            
+            # Classify potential TCP problems based on the received data
+            classify_tcp_problems(data)
+
+            return jsonify({"status": "success"}), 200  # Return a success response
+
+        except ValueError as e:
+            logging.error(f"ValueError: {str(e)}")
+            return jsonify({"error": "Invalid data", "message": str(e)}), 400
+        except Exception as e:
+            logging.error(f"Unexpected error: {str(e)}")
+            return jsonify({"error": "Server error", "message": str(e)}), 500
+
+
+    def classify_tcp_problems(data):
+        """Classify TCP connection problems based on provided data."""
+        node = data.get('node', 'Unknown')
+        stats = data.get("stats", [])
+
+        if not stats:
+            logging.warning(f"Node {node}: No connection stats found.")
+            return
+        
+        for conn in stats:
+            # Ensure conn is a dictionary
+            if not isinstance(conn, dict):
+                logging.warning(f"Node {node}: Invalid connection format - {conn}")
+                continue
+
+            # Check for active connections (ESTABLISHED status)
+            if conn.get("status") == "ESTABLISHED":
+                local_address = conn.get('local_address', 'Unknown')
+                remote_address = conn.get('remote_address', 'Unknown')
+                logging.info(f"Node {node}: Active connection {local_address} -> {remote_address}")
+
+            # Check for potential retransmission issues
+            retransmissions = conn.get("retransmissions")
+            if retransmissions is not None and retransmissions > 0:
+                local_address = conn.get('local_address', 'Unknown')
+                logging.warning(f"Node {node}: Potential retransmission issue in connection {local_address} (Retransmissions: {retransmissions})")
+
+
+    @app.route('/aggregate', methods=['GET'])
+    def get_aggregated_logs():
+        """Return the aggregated logs."""
+        return jsonify({"logs": logs}), 200
+
+
+    if __name__ == '__main__':
+        # Run the Flask app on all available interfaces at port 5000
+        app.run(host='0.0.0.0', port=5000)
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: data-aggregator
+  labels:
+    app: data-aggregator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: data-aggregator
+  template:
+    metadata:
+      labels:
+        app: data-aggregator
+    spec:
+      containers:
+      - name: data-aggregator
+        image: python:3.8-slim
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          apt-get update && apt-get install -y curl net-tools dnsutils && \
+          pip install flask && \
+          python /app/data_aggregator.py
+        ports:
+        - containerPort: 5000
+        volumeMounts:
+        - name: script-volume
+          mountPath: /app
+      volumes:
+      - name: script-volume
+        configMap:
+          name: data-aggregator-script
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: data-aggregator-service
+spec:
+  selector:
+    app: data-aggregator
+  ports:
+  - port: 5000
+    targetPort: 5000
+  type: ClusterIP
+
