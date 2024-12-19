@@ -1,0 +1,22 @@
+#TCP connection monitoring for an application deployed as microservice in a Kubernetes cluster
+
+Team:
+Paavaneeswar Reddy - CS22BTECH11014
+Ramanuja - ES22BTECH11022
+Sreehith Sanam - ES22BTECH11033
+Rishi Cheekatla - ES22BTECH11009
+Krishna Chaitanya - ES22BTECH11025
+Kosaraju Jyothsna Abhay - ES22BTECH11021
+
+#commads
+-> minikube start
+-> kubectl apply -f data-aggregator-deployment.yaml
+-> kubectl apply -f tcp-monitor-daemonset.yaml
+-> kubectl get pods
+-> kubectl port-forward svc/data-aggregator-service 5000:5000 (#in different terminal)
+-> locust -f locustfile.py --web-port 8080
+-> curl http://localhost:5000/aggregate
+
+#minikube installation
+curl -LO https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64
+sudo install minikube-linux-amd64 /usr/local/bin/minikube

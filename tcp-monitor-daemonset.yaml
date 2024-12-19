@@ -1,0 +1,82 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tcp-monitor-script
+data:
+  tcp_monitor.py: |
+    import os
+    import time
+    import psutil
+    import socket
+    import requests
+
+    AGGREGATOR_URL = "http://data-aggregator-service:5000/collect"
+
+    def get_tcp_stats():
+        tcp_stats = []
+        for conn in psutil.net_connections(kind='tcp'):
+            stats = {
+                "local_address": str(conn.laddr) if conn.laddr else None,
+                "remote_address": str(conn.raddr) if conn.raddr else None,
+                "status": conn.status,
+            }
+            if conn.status == "ESTABLISHED":
+                try:
+                    with open(f"/proc/net/tcp") as f:
+                        tcp_table = f.readlines()
+                        # Additional parsing can be added here if needed
+                        stats.update({
+                            "retransmissions": "placeholder",
+                            "rtt": "placeholder",
+                        })
+                except Exception as e:
+                    print(f"Error reading /proc/net/tcp: {e}")
+            tcp_stats.append(stats)
+        return tcp_stats
+
+    def send_stats_to_aggregator(stats):
+        try:
+            response = requests.post(AGGREGATOR_URL, json={
+                "node": socket.gethostname(), 
+                "stats": stats
+            })
+            print(f"Sent data to aggregator: {response.status_code}")
+        except Exception as e:
+            print(f"Error sending data: {e}")
+
+    if __name__ == "__main__":
+        while True:
+            stats = get_tcp_stats()
+            send_stats_to_aggregator(stats)
+            time.sleep(5)
+
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: tcp-monitor
+spec:
+  selector:
+    matchLabels:
+      app: tcp-monitor
+  template:
+    metadata:
+      labels:
+        app: tcp-monitor
+    spec:
+      containers:
+      - name: tcp-monitor
+        image: python:3.9-slim
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          apt-get update && apt-get install -y curl net-tools dnsutils && \
+          pip install psutil requests &&\
+          python3 /app/tcp_monitor.py
+        volumeMounts:
+        - name: script-volume
+          mountPath: /app
+      volumes:
+      - name: script-volume
+        configMap:
+          name: tcp-monitor-script
